@@ -1,0 +1,1703 @@
+---
+title: "Biomarker_paper1_main"
+author: "Benjamin Gravesteijn"
+date: "3 september 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+set.seed(123)
+################### preparation###########
+library(bgravesteijn)
+library(readxl)
+library(tableone)
+library(PerformanceAnalytics)
+library(ggplot2)
+library(mice)
+library(miceadds)
+library(data.table)
+library(rms)
+library(boot)
+library(lubridate)
+library(ggpubr)
+library(knitr)
+library(pROC)
+
+
+markers <- c("S100B","NSE","GFAP","UCHL1","Tau","NFL")
+combs   <- c("GFAP + UCHL1", "GFAP + S100B", "GFAP + UCHL1 + S100B")
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+
+
+
+load("data/imputed.RData")
+df <- dfi$data
+
+df$ctpos <- as.numeric(df$CT.=="present")
+dfi <- cbind(dfi, ctpos=df$ctpos)
+
+obs.gose <- !is.na(df$Subject.GOSE6monthEndpointDerived)
+
+cor.ct.var <- c("InjuryHx.SympVomiting",
+                "CTMRI.CTRiskFactorsERFallFromAnyElev",
+                "CTMRI.CTRiskFactorsERVulnRoadUser",
+                "CTMRI.CTRiskFactorsERPhysEvidTraumaHeadSkull",
+                "CTMRI.CTRiskFactorsERAnticoagTx",
+                "CTMRI.CTRiskFactorsERIntoxication",
+                "CTMRI.CTRiskFactorsERHeadache",
+                "InjuryHx.LOCRGADur",
+                "InjuryHx.LOCPTADuration",
+                "CTMRI.CTRiskFactorsERLOC",
+                "GCSDer",
+                "Subject.Age")
+# cor.unfav.var <- c("InjuryHx.PupilsBaselineDerived",
+#                    "hb",
+#                    "glucose",
+#                    "InjuryHx.EDComplEventHypotension",
+#                    "InjuryHx.EDComplEventHypoxia",
+#                    "GCSDer",
+#                    "Subject.Sex",
+#                    "Subject.Age")
+
+##MR positive
+#### predicting mr+ in ct-
+mrpos <- read.csv("data/CENTERTBI_CTnegMRpos_20190806_indeterminatecheckedbyneuroradiology_cambridge (1).csv")
+mrpos <- unique(as.character(mrpos$Gupi)) 
+mrneg <- read.csv("data/CENTERTBI_CTnegMRneg_20190608 (2).csv")
+mrneg <- unique(as.character(mrneg$Gupi)) 
+
+df$ctnegmrpos <- as.numeric(df$gupi%in%mrpos)
+dfi <- cbind(dfi, ctnegmrpos = df$ctnegmrpos)
+```
+
+```{r}
+#severity
+df$severity <- factor(ifelse(df$GCSDer<9,1,
+                      ifelse(df$GCSDer>=9&df$GCSDer<13,
+                             2,ifelse(
+                               df$GCSDer>=13&df$GCSDer<15,3,
+                               ifelse(df$GCSDer==15,4,NA)
+                             ))))
+
+levels(df$severity) <- c("Severe", "Moderate", "Mild (13-14)", "Mild (15)")
+
+
+df$Stratum <- factor(df$Stratum, levels=c("ER", "Adm", "ICU"))
+```
+
+For these analyses, only patients with blood samples taken <24 hours are included. Moreover, the values of the biomarkers were truncated at the 97.5th percentile.
+
+
+## Boxplots 
+```{r,  fig.width=10, fig.height=13}
+gfap_sev <- ggplot(df[!is.na(df$severity),], 
+       aes(x=severity, fill=CT., y=GFAP))+
+  geom_boxplot(alpha=0.8)+
+  theme_bw()+
+  scale_y_log10()+
+  theme(text=element_text(size = 16))+ 
+  guides(fill=guide_legend(title="CT abnormality"))
+
+gfap_str <- ggplot(df, 
+       aes(x=Stratum, fill=CT., y=GFAP))+
+  geom_boxplot(alpha=0.8)+
+  theme_bw()+
+  scale_y_log10()+
+  theme(text=element_text(size = 16))
+
+nse_sev <- ggplot(df[!is.na(df$severity),], 
+       aes(x=severity, fill=CT., y=NSE))+
+  geom_boxplot(alpha=0.8)+
+  theme_bw()+
+  scale_y_log10()+
+  theme(text=element_text(size = 16))+ 
+  guides(fill=guide_legend(title="CT abnormality"))
+
+nse_str <- ggplot(df, 
+       aes(x=Stratum, fill=CT., y=NSE))+
+  geom_boxplot(alpha=0.8)+
+  theme_bw()+
+  scale_y_log10()+
+  theme(text=element_text(size = 16))+ 
+  guides(fill=guide_legend(title="CT abnormality"))
+
+
+nfl_sev <- ggplot(df[!is.na(df$severity),], 
+       aes(x=severity, fill=CT., y=NFL))+
+  geom_boxplot(alpha=0.8)+
+  theme_bw()+
+  scale_y_log10()+
+  theme(text=element_text(size = 16))+ 
+  guides(fill=guide_legend(title="CT abnormality"))
+
+nfl_str <- ggplot(df, 
+       aes(x=Stratum, fill=CT., y=NFL))+
+  geom_boxplot(alpha=0.8)+
+  theme_bw()+
+  scale_y_log10()+
+  theme(text=element_text(size = 16))+ 
+  guides(fill=guide_legend(title="CT abnormality"))
+
+s100b_sev <- ggplot(df[!is.na(df$severity),], 
+       aes(x=severity, fill=CT.,y=`S100B` ))+
+  geom_boxplot(alpha=0.8)+
+  theme_bw()+
+  scale_y_log10()+
+  theme(text=element_text(size = 16))+ 
+  guides(fill=guide_legend(title="CT abnormality"))
+
+s100b_str <- ggplot(df, 
+       aes(x=Stratum, fill=CT., y=`S100B`))+
+  geom_boxplot(alpha=0.8)+
+  theme_bw()+
+  scale_y_log10()+
+  theme(text=element_text(size = 16))+ 
+  guides(fill=guide_legend(title="CT abnormality"))
+
+uchl1_sev <- ggplot(df[!is.na(df$severity),], 
+       aes(x=severity, fill=CT., y=UCHL1))+
+  geom_boxplot(alpha=0.8)+
+  theme_bw()+
+  scale_y_log10()+
+  theme(text=element_text(size = 16))+ 
+  guides(fill=guide_legend(title="CT abnormality"))
+
+uchl1_str <- ggplot(df, 
+       aes(x=Stratum, fill=CT., y=UCHL1))+
+  geom_boxplot(alpha=0.8)+
+  theme_bw()+
+  scale_y_log10()+
+  theme(text=element_text(size = 16))+ 
+  guides(fill=guide_legend(title="CT abnormality"))
+
+tau_sev <- ggplot(df[!is.na(df$severity),], 
+       aes(x=severity, fill=CT., y=Tau))+
+  geom_boxplot(alpha=0.8)+
+  theme_bw()+
+  scale_y_log10()+
+  theme(text=element_text(size = 16))+ 
+  guides(fill=guide_legend(title="CT abnormality"))
+
+tau_str <- ggplot(df, 
+       aes(x=Stratum, fill=CT.,y=Tau))+
+  geom_boxplot(alpha=0.8)+
+  theme_bw()+
+  scale_y_log10()+
+  theme(text=element_text(size = 16))+ 
+  guides(fill=guide_legend(title="CT abnormality"))
+
+
+multiplot(s100b_str+theme(legend.position = "none")+xlab(""),
+          s100b_sev+theme(legend.position = "none")+xlab(""),
+          nse_str+theme(legend.position = "none")+xlab(""),
+          nse_sev+theme(legend.position = "none")+xlab(""),
+          gfap_str+theme(legend.position = "none"),
+          gfap_sev+theme(legend.position = "none"),
+          layout = matrix(1:6, byrow = TRUE, ncol = 2))
+
+multiplot(uchl1_str+theme(legend.position = "none")+xlab(""),
+          uchl1_sev+theme(legend.position = "none")+xlab(""),
+          tau_str+theme(legend.position = "none")+xlab(""),
+          tau_sev+theme(legend.position = "none")+xlab(""),
+          nfl_str+theme(legend.position = "none"),
+          nfl_sev+theme(legend.position = "none"),
+          layout = matrix(1:6, byrow = TRUE, ncol = 2))
+          
+
+pdf("output_main/distributions.pdf", width=10, height=13)
+multiplot(s100b_str+theme(legend.position = "none")+xlab(""),
+          s100b_sev+theme(legend.position = "none")+xlab(""),
+          nse_str+theme(legend.position = "none")+xlab(""),
+          nse_sev+theme(legend.position = "none")+xlab(""),
+          gfap_str+theme(legend.position = "none"),
+          gfap_sev+theme(legend.position = "none"),
+          layout = matrix(1:6, byrow = TRUE, ncol = 2))
+
+multiplot(uchl1_str+theme(legend.position = "none")+xlab(""),
+          uchl1_sev+theme(legend.position = "none")+xlab(""),
+          tau_str+theme(legend.position = "none")+xlab(""),
+          tau_sev+theme(legend.position = "none")+xlab(""),
+          nfl_str+theme(legend.position = "none"),
+          nfl_sev+theme(legend.position = "none"),
+          layout = matrix(1:6, byrow = TRUE, ncol = 2))
+dev.off()
+```
+
+The figures above display the distributions of the biomarkers over the strata, and over the TBI severity. I decided to display the mild TBI as 13-14 and 15 instead of 13-15 and 15, because now you see all patients: if you show the GCS 15 group twice, the picture gets a little distorted. The table with the absolute values is displayed below. First, the overall values per stratum and severity are displayed, followed by the values for patients with and without a positive CT scan.
+
+```{r}
+tblstr_overall <- CreateTableOne(data=df, vars = markers, strata = "Stratum")
+tblstr_overall.p <- print(tblstr_overall, nonnorm=markers, printToggle=FALSE, test=FALSE,
+                   catDigits=1, contDigits=1)
+t.tblstr_overall.p <- t(tblstr_overall.p)
+t.tblstr_overall.p <- rbind(Stratum=rep("", ncol(t.tblstr_overall.p)),t.tblstr_overall.p)
+
+tblsev_overall <- CreateTableOne(data=df, vars = markers, strata = "severity")
+tblsev_overall.p <- print(tblsev_overall, nonnorm=markers, printToggle=FALSE, test=FALSE,
+                   catDigits=1, contDigits=1)
+t.tblsev_overall.p <- t(tblsev_overall.p)
+t.tblsev_overall.p <- rbind(Stratum=rep("", ncol(t.tblsev_overall.p)),t.tblsev_overall.p)
+
+df$stratum_ct <- as.character(df$Stratum)
+df$stratum_ct <- ifelse(df$CT.=="absent", paste(df$stratum_ct, "CT-"), paste(df$stratum_ct, "CT+"))
+df$stratum_ct <- factor(df$stratum_ct, levels=c("ER CT-", "ER CT+", "Adm CT-", "Adm CT+", "ICU CT-", "ICU CT+"))
+tblstr <- CreateTableOne(data=df, vars = markers, strata = "stratum_ct")
+tblstr.p <- print(tblstr, nonnorm=markers, printToggle=FALSE, test=FALSE,
+                   catDigits=1, contDigits=1)
+t.tblstr.p <- t(tblstr.p)
+t.tblstr.p <- rbind(`Stratum and CT positivity`=rep("", ncol(t.tblstr.p)),
+                    t.tblstr.p)
+
+df$severity_ct <- as.character(df$severity)
+df$severity_ct <- ifelse(df$CT.=="absent", paste(df$severity_ct, "CT-"), paste(df$severity_ct, "CT+"))
+df$severity_ct <- factor(df$severity_ct, levels=c("Severe CT-", "Severe CT+", 
+                                                  "Moderate CT-", "Moderate CT+", 
+                                                  "Mild (13-14) CT-", "Mild (13-14) CT+", 
+                                                  "Mild (15) CT-", "Mild (15) CT+"))
+tblsev <- CreateTableOne(data=df, vars = markers, strata = "severity_ct")
+tblsev.p <- print(tblsev, nonnorm=markers, printToggle=FALSE, test=FALSE,
+                   catDigits=1, contDigits=1)
+t.tblsev.p <- t(tblsev.p)
+t.tblsev.p <- rbind(`Severity and CT positivity`=rep("", ncol(t.tblsev.p)),
+                    t.tblsev.p)
+tbl.distr <- rbind(t.tblsev_overall.p,t.tblstr_overall.p, t.tblsev.p, t.tblstr.p)
+kable(tbl.distr)
+
+write.csv(tbl.distr, file="output_main/distribution_table.csv")
+```
+
+
+## Correlation
+```{r}
+my_data <- df[, markers]
+chart.Correlation(my_data[df$Stratum=="ER",], histogram=TRUE, pch=19)
+chart.Correlation(my_data[df$Stratum=="Adm",], histogram=TRUE, pch=19)
+chart.Correlation(my_data[df$Stratum=="ICU",], histogram=TRUE, pch=19)
+
+pdf("output_main/correlation.pdf")
+chart.Correlation(my_data[df$Stratum=="ER",], histogram=TRUE, pch=19)
+chart.Correlation(my_data[df$Stratum=="Adm",], histogram=TRUE, pch=19)
+chart.Correlation(my_data[df$Stratum=="ICU",], histogram=TRUE, pch=19)
+dev.off()
+```
+
+The first plot is for the ER stratum, the second for the admission stratum, and the third for the ICU stratum. We do recognize that the plot has become somewhat more complex, but it also contains more information, including marginal and bivariate distributions, and significance of the correlation. 
+
+The overall plot is also of interest, but is not for display in the main paper, we think. It could, however, be included in the supplemental materials:
+
+```{r}
+
+chart.Correlation(my_data, histogram=TRUE, pch=19)
+pdf("output_main/correlation_overall.pdf")
+chart.Correlation(my_data, histogram=TRUE, pch=19)
+dev.off()
+```
+
+#Predicting CT+
+
+## Adjusted
+First, the main result: showing the incremental prognostic effect of these biomarkers for prediction of CT+, adjusted for clinical decision rule variables. The following subgroups were analyzed:
+
+1. Overall
+2. Mild
+3. ER
+4. Adm 
+5. ICU
+
+We corrected for the following variables:
+`r paste(cor.ct.var, collapse=", ")`, time of sampling, stratum. 
+An overview of the characteristics across the three stratum is displayed below:
+
+```{r}
+
+tbl.cdr <- CreateTableOne(vars = cor.ct.var, strata = "stratum_ct", data=df, 
+                          factorVars = cor.ct.var[-c(13,11)])
+tbl.cdr.p <- print(tbl.cdr,nonnorm = cor.ct.var[c(13,11)], printToggle=FALSE, test=FALSE,
+                   catDigits=1, contDigits=1)
+
+tbl.cdr_ct <- CreateTableOne(vars = cor.ct.var, strata = "CT.", data=df, 
+                          factorVars = cor.ct.var[-c(13,11)])
+tbl.cdr_ct.p <- print(tbl.cdr_ct,nonnorm = cor.ct.var[c(13,11)],
+                      printToggle=FALSE, test=FALSE,
+                      catDigits=1, contDigits=1)
+
+tbl.cdr.p <- cbind(tbl.cdr_ct.p, tbl.cdr.p)
+kable(tbl.cdr.p)
+write.csv(tbl.cdr.p, file="output_main/table_cdr_vars.csv")
+```
+
+This table will probably be for the supplemental material. The first two columns are the coluns representing all patients with a positive of or negative ct scan, the other columns represent the same data, but stratified over the strata. You can see that the variables only affect CT positivity in a minor way. Probably the presence of multiple of these variables may predict CT positivity.
+
+## Adjusted results
+
+
+```{r multivar}
+## to store the results in
+result.mult <- expand.grid(biomarker=c(markers,"all", "none"),
+                          c_stat=NA,
+                          lo=NA,
+                          hi=NA,
+                          outcome=c("CT+"),
+                          subgroup=c("Overall","Mild","GCS 15","ER","ICU", "Adm"),
+                          events_per_df=NA)
+
+
+
+
+for(i in 1:nrow(result.mult)){
+  if(result.mult$subgroup[i]=="Overall")  subset <- rep(TRUE, nrow(df)) 
+  if(result.mult$subgroup[i]=="Mild")     subset <- df$GCSDer>12&!is.na(df$GCSDer)
+  if(result.mult$subgroup[i]=="GCS 15")   subset <- df$GCSDer==15&!is.na(df$GCSDer)
+  if(result.mult$subgroup[i]=="ER")       subset <- df$Stratum=="ER"
+  if(result.mult$subgroup[i]=="ICU")      subset <- df$Stratum=="ICU"
+  if(result.mult$subgroup[i]=="Adm")      subset <- df$Stratum=="Adm"
+  
+
+  ##fit the models
+  if(result.mult$biomarker[i]=="all"){
+    if(result.mult$outcome[i]=="CT+"){
+      if(result.mult$subgroup[i]%in%c("ER", "ICU", "Adm")){
+        #if the patient is in the ER/ICU/Adm stratum, don't adjust for stratum
+        fit <- fit.mult.impute(formula = as.formula(paste("ctpos ~ rcs(UCHL1, 3) + rcs(NSE, 3)+ rcs(Tau, 3) + rcs(GFAP, 3) + rcs(S100B,3) + rcs(NFL, 3)+ rcs(t_sample,3)+",paste(cor.ct.var, collapse="+"),collapse="+")), 
+                             fitter = glm, xtrans = dfi, data = df, family = "binomial",
+                             subset=subset, pr = FALSE)
+      }else{
+        fit <- fit.mult.impute(formula = as.formula(paste("ctpos ~ rcs(UCHL1, 3) + rcs(NSE, 3)+ rcs(Tau, 3) + rcs(GFAP, 3) + rcs(S100B,3) + rcs(NFL, 3)+ t_sample + Stratum+ I(t_sample^2)+",paste(cor.ct.var, collapse="+"),collapse="+")), 
+                             fitter = glm, xtrans = dfi, data = df, family = "binomial",
+                             subset=subset, pr = FALSE)
+      }
+    }else{
+      if(result.mult$subgroup[i]%in%c("ER", "ICU", "Adm")){
+        #if patient is in the ER/Adm/ICU stratum, don't adjust for stratum
+          fit <- fit.mult.impute(formula = as.formula(paste("ctnegmrpos ~ rcs(UCHL1, 3) + rcs(NSE, 3) + rcs(Tau, 3) + rcs(GFAP,3) + rcs(S100B, 3) + rcs(NFL, 3) + rcs(t_sample,3) +", paste(cor.ct.var, collapse="+"))), 
+                               fitter = lrm, xtrans = dfi, data = df, subset = subset, 
+                               pr = FALSE)
+      }else{
+        fit <- fit.mult.impute(formula = as.formula(paste("ctnegmrpos~ rcs(UCHL1, 3) + rcs(NSE, 3) + rcs(Tau, 3) + rcs(GFAP,3) + rcs(S100B, 3) + rcs(NFL, 3) + rcs(t_sample,3) + Stratum+", paste(cor.ct.var, collapse="+"))), 
+                               fitter = lrm, xtrans = dfi, data = df, subset = subset, 
+                               pr = FALSE)
+      }
+       
+    }
+  }else{
+    if(result.mult$biomarker[i]=="none"){
+      if(result.mult$outcome[i]=="CT+"){
+        if(result.mult$subgroup[i]%in%c("ER", "ICU", "Adm")){
+            #if patient is in ER/ICU/adm stratum, don't adjust for stratum
+            fit <- fit.mult.impute(formula = as.formula(paste("ctpos ~ rcs(t_sample,3)+",paste(cor.ct.var, collapse="+"))), 
+                                 fitter = glm, xtrans = dfi, data = df, family = "binomial",
+                                 subset=subset, pr = FALSE)
+          }else{
+          fit <- fit.mult.impute(formula = as.formula(paste("ctpos ~ rcs(t_sample,3)+Stratum+",paste(cor.ct.var, collapse="+"))), 
+                                 fitter = glm, xtrans = dfi, data = df, family = "binomial",
+                                 subset=subset, pr = FALSE)
+        }
+      }else{
+      if(result.mult$subgroup[i]%in%c("ER", "ICU", "Adm")){
+        #if patient is ICU/Adm stratum, don't adjust for stratum
+          fit <- fit.mult.impute(formula = as.formula(paste("ctnegmrpos~ rcs(t_sample,3) +", paste(cor.ct.var, collapse="+"))), 
+                               fitter = lrm, xtrans = dfi, data = df, subset = subset, 
+                               pr = FALSE)
+        
+      }else{
+        fit <- fit.mult.impute(as.formula(paste("ctnegmrpos ~  rcs(t_sample,3) +Stratum+", paste(cor.ct.var, collapse="+"))), 
+                               fitter = lrm, xtrans = dfi, data = df, subset = subset, 
+                               pr = FALSE)
+      }
+       
+    }
+    }else{
+      if(result.mult$outcome[i]=="CT+"){
+        if(result.mult$subgroup[i]%in%c("ER", "ICU", "Adm")){
+          #if patient is in the er/icu/adm stratum, don't correct for stratum
+          fit <- fit.mult.impute(formula = as.formula(paste("ctpos ~ rcs(",
+                                                          result.mult$biomarker[i],
+                                                          ",3)+rcs(t_sample,3) +",
+                                                          paste(cor.ct.var, collapse="+"))), 
+                               fitter = glm, xtrans = dfi, data = df, family = "binomial",
+                               subset=subset, pr=FALSE)
+        }else{
+          fit <- fit.mult.impute(formula = as.formula(paste("ctpos ~ rcs(",
+                                                          result.mult$biomarker[i],
+                                                          ",3)+rcs(t_sample,3)+Stratum+",
+                                                          paste(cor.ct.var, collapse="+"))), 
+                               fitter = glm, xtrans = dfi, data = df, family = "binomial",
+                               subset=subset, pr = FALSE)
+        }
+         
+      }else{
+        if(result.mult$subgroup[i]%in%c("ER", "ICU", "Adm")){
+          #if patient is in the ER/ICU/Adm stratum, don't adjust for stratum
+            fit <- fit.mult.impute(formula = as.formula(paste("ctnegmrpos~ rcs(",
+                                                            result.mult$biomarker[i],
+                                                      ",3)+rcs(t_sample,3)+",
+                                                            paste(cor.ct.var, 
+                                                                  collapse="+"))), 
+                                 fitter = lrm, xtrans = dfi, data = df, subset = subset, 
+                                 pr = FALSE)
+          
+        }else{
+          fit <- fit.mult.impute(formula = as.formula(paste("ctnegmrpos ~ rcs(",
+                                                            result.mult$biomarker[i],
+                                                      ",3)+rcs(t_sample,3)+Stratum+",
+                                                            paste(cor.ct.var, 
+                                                                  collapse="+"))), 
+                                 fitter = lrm, xtrans = dfi, data = df, subset = subset,
+                                pr = FALSE)
+        }
+      }
+    }
+    
+  }
+  
+  
+  fit$call$formula
+  cstat <- roc((df$CT.=="present")[subset], 
+                 predict(fit, type="response"))
+  cstat <- with(df[subset],
+                roc(as.formula(paste("ctpos ~ rcs(t_sample,3)+", 
+                                     paste(cor.ct.var, 
+                                           collapse = "+")))))
+  c_res <- cstat$auc
+  
+  ci <- c(ci.auc(c_res, boot.n=200, method="bootstrap", progress="none"))
+  
+  result.mult$c_stat[i] <- as.numeric(ci[2])
+  result.mult$lo[i] <- as.numeric(ci[1])
+  result.mult$hi[i] <- as.numeric(ci[3])
+  
+  
+  if(result.mult$outcome[i]=="CT+"){
+    events <- min(table(df$CT.[subset]))
+  }else{
+    events <- min(table(df$ctnegmrpos[subset]))
+  }
+  deg.f <- length(coef(fit)-1)
+  result.mult$events_per_df[i] <- events/deg.f
+}
+write.csv(result.mult, file="output_main/ctats_multivariably.csv")
+```
+
+
+
+```{r}
+result.mult <- read.csv("output_main/ctats_multivariably.csv")
+plot.df <- result.mult
+
+plot.df$biomarker <- factor(plot.df$biomarker,levels=c("none",
+                                                       markers,
+                                                       "all"))
+plot.df$subgroup <- factor(plot.df$subgroup, levels=c("Overall",
+                                                      "Mild",
+                                                      "GCS 15",
+                                                      "ER",
+                                                      "Adm",
+                                                      "ICU"))
+
+
+plt.mv.1 <- ggplot(plot.df[plot.df$biomarker!="none"&
+                             plot.df$subgroup=="Overall",],
+       aes(x=subgroup,y=c_stat, ymin=lo, ymax=hi,col=biomarker))+
+  geom_point(position=position_dodge(width = 0.5), cex=3)+
+  geom_linerange(position=position_dodge(width = 0.5), cex=2)+
+  theme_bw()+
+  xlab("")+
+  ylab("")+
+  scale_y_continuous("C-statistic", limits=c(0.5,1))+
+  theme(text=element_text(size=16),
+        legend.position = "none")+
+  scale_color_manual(values=2:8)+
+  geom_hline(yintercept = plot.df[plot.df$biomarker=="none"&
+                             plot.df$subgroup=="Overall","c_stat"],
+             lty=2)
+plt.mv.2 <- ggplot(plot.df[plot.df$biomarker!="none"&
+                             plot.df$subgroup=="Mild",],
+       aes(x=subgroup,y=c_stat, ymin=lo, ymax=hi,col=biomarker))+
+  geom_point(position=position_dodge(width = 0.5), cex=3)+
+  geom_linerange(position=position_dodge(width = 0.5), cex=2)+
+  theme_bw()+
+  xlab("")+
+  ylab("")+
+  scale_y_continuous("C-statistic", limits=c(0.5,1))+
+  theme(text=element_text(size=16),
+        legend.position = "none")+
+  scale_color_manual(values=2:8)+
+  geom_hline(yintercept = plot.df[plot.df$biomarker=="none"&
+                             plot.df$subgroup=="Mild","c_stat"],
+             lty=2)
+plt.mv.3 <- ggplot(plot.df[plot.df$biomarker!="none"&
+                             plot.df$subgroup=="ER",],
+       aes(x=subgroup,y=c_stat, ymin=lo, ymax=hi,col=biomarker))+
+  geom_point(position=position_dodge(width = 0.5), cex=3)+
+  geom_linerange(position=position_dodge(width = 0.5), cex=2)+
+  theme_bw()+
+  xlab("")+
+  ylab("")+
+  scale_y_continuous("C-statistic", limits=c(0.5,1))+
+  theme(text=element_text(size=16),
+        legend.position = "none")+
+  scale_color_manual(values=2:8)+
+  geom_hline(yintercept = plot.df[plot.df$biomarker=="none"&
+                             plot.df$subgroup=="ER","c_stat"],
+             lty=2)
+plt.mv.4 <- ggplot(plot.df[plot.df$biomarker!="none"&
+                             plot.df$subgroup=="Adm",],
+       aes(x=subgroup,y=c_stat, ymin=lo, ymax=hi,col=biomarker))+
+  geom_point(position=position_dodge(width = 0.5), cex=3)+
+  geom_linerange(position=position_dodge(width = 0.5), cex=2)+
+  theme_bw()+
+  xlab("")+
+  ylab("")+
+  scale_y_continuous("C-statistic", limits=c(0.5,1))+
+  theme(text=element_text(size=16),
+        legend.position = "none")+
+  scale_color_manual(values=2:8)+
+  geom_hline(yintercept = plot.df[plot.df$biomarker=="none"&
+                             plot.df$subgroup=="Adm","c_stat"],
+             lty=2)
+plt.mv.5 <- ggplot(plot.df[plot.df$biomarker!="none"&
+                             plot.df$subgroup=="ICU",],
+       aes(x=subgroup,y=c_stat, ymin=lo, ymax=hi,col=biomarker))+
+  geom_point(position=position_dodge(width = 0.5), cex=3)+
+  geom_linerange(position=position_dodge(width = 0.5), cex=2)+
+  theme_bw()+
+  xlab("")+
+  ylab("")+
+  scale_y_continuous("C-statistic", limits=c(0.5,1))+
+  theme(text=element_text(size=16),
+        legend.position = "none")+
+  scale_color_manual(values=2:8)+
+  geom_hline(yintercept = plot.df[plot.df$biomarker=="none"&
+                             plot.df$subgroup=="ICU","c_stat"],
+             lty=2)
+plt.mv.6 <- ggplot(plot.df[plot.df$biomarker!="none"&
+                             plot.df$subgroup=="GCS 15",],
+       aes(x=subgroup,y=c_stat, ymin=lo, ymax=hi,col=biomarker))+
+  geom_point(position=position_dodge(width = 0.5), cex=3)+
+  geom_linerange(position=position_dodge(width = 0.5), cex=2)+
+  theme_bw()+
+  xlab("")+
+  ylab("")+
+  scale_y_continuous("C-statistic", limits=c(0.5,1))+
+  theme(text=element_text(size=16),
+        legend.position = "none")+
+  scale_color_manual(values=2:8)+
+  geom_hline(yintercept = plot.df[plot.df$biomarker=="none"&
+                             plot.df$subgroup=="GCS 15","c_stat"],
+             lty=2)
+
+legend <- get_legend(plt.mv.5+theme(legend.position="left"))
+legend <- as_ggplot(legend)
+
+multiplot(plt.mv.1,
+          plt.mv.2,
+          plt.mv.6,
+          plt.mv.3,
+          plt.mv.4,
+          plt.mv.5,
+          legend,cols=3)
+
+pdf("output_main/result_ct.pdf")
+multiplot(plt.mv.1,
+          plt.mv.2,
+          plt.mv.6,
+          plt.mv.3,
+          plt.mv.4,
+          plt.mv.5,
+          legend,cols=3)
+dev.off()
+
+plot.df$c_stat <- round(plot.df$c_stat, 3)
+kable(plot.df[,c("biomarker", "c_stat", "lo", "hi", "subgroup", "events_per_df")],
+      row.names=FALSE)
+```
+
+The most promosing biomarker is GFAP: it adds to the clinical decision rule variables (dotted line).
+
+### Combinations GFAP
+The following combinations were explored as extra analysis, to be compared to GFAP alone:
+`r combs`.
+
+```{r}
+## to store the results in
+result.comb <- expand.grid(biomarker=c("none","GFAP", combs),
+                          c_stat=NA,
+                          lo=NA,
+                          hi=NA,
+                          outcome=c("CT+"),
+                          subgroup=c("Overall","Mild","GCS 15","ER","ICU", "Adm"),
+                          adjust=c("Yes", "No"),
+                          events_per_df=NA)
+
+result.comb <- result.comb[!(result.comb$adjust=="No"&result.comb$biomarker=="none"),]
+
+for(i in 1:nrow(result.comb)){
+  if(result.comb$subgroup[i]=="Overall")  subset <- rep(TRUE, nrow(df)) 
+  if(result.comb$subgroup[i]=="Mild")     subset <- df$GCSDer>12&!is.na(df$GCSDer)
+  if(result.comb$subgroup[i]=="GCS 15")   subset <- df$GCSDer==15&!is.na(df$GCSDer)
+  if(result.comb$subgroup[i]=="ER")       subset <- df$Stratum=="ER"
+  if(result.comb$subgroup[i]=="ICU")      subset <- df$Stratum=="ICU"
+  if(result.comb$subgroup[i]=="Adm")      subset <- df$Stratum=="Adm"
+  
+
+  ##the formulas for the models
+  if(result.comb$biomarker[i]=="none"){
+    fml <- paste("ctpos ~ rcs(t_sample,3)+",paste(cor.ct.var, collapse="+"),collapse="+")
+  }
+  
+  if(result.comb$biomarker[i]=="GFAP"){
+    if(result.comb$adjust[i]=="Yes"){
+      fml <- paste("ctpos ~ rcs(t_sample,3)+rcs(GFAP,3)+",
+                   paste(cor.ct.var,
+                         collapse="+"),
+                   collapse="+")
+    }else{
+      fml <- paste("ctpos ~ rcs(t_sample,3)+rcs(GFAP,3)")
+    }
+  }
+  
+  if(result.comb$biomarker[i]=="GFAP + UCHL1"){
+    if(result.comb$adjust[i]=="Yes"){
+      fml <- paste("ctpos ~ rcs(t_sample,3)+rcs(GFAP,3)+rcs(UCHL1,3)+",
+                   paste(cor.ct.var,
+                         collapse="+"),
+                   collapse="+")
+    }else{
+      fml <- paste("ctpos ~ rcs(t_sample,3)+rcs(GFAP,3)+rcs(UCHL1,3)")
+    }
+  }
+  
+  if(result.comb$biomarker[i]=="GFAP + S100B"){
+    if(result.comb$adjust[i]=="Yes"){
+      fml <- paste("ctpos ~ rcs(t_sample,3)+rcs(GFAP,3)+rcs(S100B,3)+",
+                   paste(cor.ct.var,
+                         collapse="+"),
+                   collapse="+")
+    }else{
+      fml <- paste("ctpos ~ rcs(t_sample,3)+rcs(GFAP,3)+rcs(S100B,3)")
+    }
+  }
+  
+  if(result.comb$biomarker[i]=="GFAP + UCHL1 + S100B"){
+    if(result.comb$adjust[i]=="Yes"){
+      fml <- paste("ctpos ~ rcs(t_sample,3)+rcs(GFAP,3)+rcs(S100B,3)+rcs(UCHL1,3)+",
+                   paste(cor.ct.var,
+                         collapse="+"),
+                   collapse="+")
+    }else{
+      fml <- paste("ctpos ~ rcs(t_sample,3)+rcs(GFAP,3)+rcs(S100B,3)+rcs(UCHL1,3)")
+    }
+  }
+  
+  ##fit the model
+  fit <- fit.mult.impute(formula = as.formula(fml),
+                             fitter = glm, xtrans = dfi, data = df, family = "binomial",
+                             subset=subset, pr = FALSE)
+  
+  
+  cstat <- roc((df$CT.=="present")[subset], 
+                 predict(fit, type="response"))
+  c_res <- cstat$auc
+  
+  ci <- c(ci.auc(c_res, boot.n=200, method="bootstrap", progress="none"))
+  
+  result.comb$c_stat[i] <- as.numeric(ci[2])
+  result.comb$lo[i] <- as.numeric(ci[1])
+  result.comb$hi[i] <- as.numeric(ci[3])
+  
+  
+  if(result.comb$outcome[i]=="CT+"){
+    events <- min(table(df$CT.[subset]))
+  }else{
+    events <- min(table(df$ctnegmrpos[subset]))
+  }
+  deg.f <- length(coef(fit)-1)
+  result.comb$events_per_df[i] <- events/deg.f
+}
+write.csv(result.comb, file="output_main/ctats_combination.csv")
+```
+
+```{r, fig.width=10, fig.height=13}
+result.comb <- read.csv("output_main/ctats_combination.csv")
+plot.df <- result.comb[result.comb$adjust=="Yes",]
+
+plt.mv.1 <- ggplot(plot.df[plot.df$biomarker!="none"&
+                             plot.df$subgroup=="Overall",],
+       aes(x=subgroup,y=c_stat, ymin=lo, ymax=hi,col=biomarker))+
+  geom_point(position=position_dodge(width = 0.5), cex=3)+
+  geom_linerange(position=position_dodge(width = 0.5), cex=2)+
+  theme_bw()+
+  xlab("")+
+  ylab("")+
+  scale_y_continuous("C-statistic", limits=c(0.5,1))+
+  theme(text=element_text(size=16),
+        legend.position = "none")+
+  scale_color_manual(values=2:8)+
+  geom_hline(yintercept = plot.df[plot.df$biomarker=="none"&
+                             plot.df$subgroup=="Overall","c_stat"],
+             lty=2)
+
+plt.mv.2 <- ggplot(plot.df[plot.df$biomarker!="none"&
+                             plot.df$subgroup=="Mild",],
+       aes(x=subgroup,y=c_stat, ymin=lo, ymax=hi,col=biomarker))+
+  geom_point(position=position_dodge(width = 0.5), cex=3)+
+  geom_linerange(position=position_dodge(width = 0.5), cex=2)+
+  theme_bw()+
+  xlab("")+
+  ylab("")+
+  scale_y_continuous("C-statistic", limits=c(0.5,1))+
+  theme(text=element_text(size=16),
+        legend.position = "none")+
+  scale_color_manual(values=2:8)+
+  geom_hline(yintercept = plot.df[plot.df$biomarker=="none"&
+                             plot.df$subgroup=="Mild","c_stat"],
+             lty=2)
+plt.mv.3 <- ggplot(plot.df[plot.df$biomarker!="none"&
+                             plot.df$subgroup=="ER",],
+       aes(x=subgroup,y=c_stat, ymin=lo, ymax=hi,col=biomarker))+
+  geom_point(position=position_dodge(width = 0.5), cex=3)+
+  geom_linerange(position=position_dodge(width = 0.5), cex=2)+
+  theme_bw()+
+  xlab("")+
+  ylab("")+
+  scale_y_continuous("C-statistic", limits=c(0.5,1))+
+  theme(text=element_text(size=16),
+        legend.position = "none")+
+  scale_color_manual(values=2:8)+
+  geom_hline(yintercept = plot.df[plot.df$biomarker=="none"&
+                             plot.df$subgroup=="ER","c_stat"],
+             lty=2)
+plt.mv.4 <- ggplot(plot.df[plot.df$biomarker!="none"&
+                             plot.df$subgroup=="Adm",],
+       aes(x=subgroup,y=c_stat, ymin=lo, ymax=hi,col=biomarker))+
+  geom_point(position=position_dodge(width = 0.5), cex=3)+
+  geom_linerange(position=position_dodge(width = 0.5), cex=2)+
+  theme_bw()+
+  xlab("")+
+  ylab("")+
+  scale_y_continuous("C-statistic", limits=c(0.5,1))+
+  theme(text=element_text(size=16),
+        legend.position = "none")+
+  scale_color_manual(values=2:8)+
+  geom_hline(yintercept = plot.df[plot.df$biomarker=="none"&
+                             plot.df$subgroup=="Adm","c_stat"],
+             lty=2)
+plt.mv.5 <- ggplot(plot.df[plot.df$biomarker!="none"&
+                             plot.df$subgroup=="ICU",],
+       aes(x=subgroup,y=c_stat, ymin=lo, ymax=hi,col=biomarker))+
+  geom_point(position=position_dodge(width = 0.5), cex=3)+
+  geom_linerange(position=position_dodge(width = 0.5), cex=2)+
+  theme_bw()+
+  xlab("")+
+  ylab("")+
+  scale_y_continuous("C-statistic", limits=c(0.5,1))+
+  theme(text=element_text(size=16),
+        legend.position = "none")+
+  scale_color_manual(values=2:8)+
+  geom_hline(yintercept = plot.df[plot.df$biomarker=="none"&
+                             plot.df$subgroup=="ICU","c_stat"],
+             lty=2)
+
+legend <- get_legend(plt.mv.5+theme(legend.position="left"))
+legend <- as_ggplot(legend)
+
+plt.mv.6 <- ggplot(plot.df[plot.df$biomarker!="none"&
+                             plot.df$subgroup=="GCS 15",],
+       aes(x=subgroup,y=c_stat, ymin=lo, ymax=hi,col=biomarker))+
+  geom_point(position=position_dodge(width = 0.5), cex=3)+
+  geom_linerange(position=position_dodge(width = 0.5), cex=2)+
+  theme_bw()+
+  xlab("")+
+  ylab("")+
+  scale_y_continuous("C-statistic", limits=c(0.5,1))+
+  theme(text=element_text(size=16),
+        legend.position = "none")+
+  scale_color_manual(values=2:8)+
+  geom_hline(yintercept = plot.df[plot.df$biomarker=="none"&
+                             plot.df$subgroup=="GCS 15","c_stat"],
+             lty=2)
+
+multiplot(plt.mv.1,
+          plt.mv.2,
+          plt.mv.6,
+          plt.mv.3,
+          plt.mv.4,
+          plt.mv.5,
+          legend,
+          cols=3)
+
+pdf("output_main/result_ct_adj_combs.pdf", width=10, heigh=13)
+multiplot(plt.mv.1,
+          plt.mv.2,
+          plt.mv.6,
+          plt.mv.3,
+          plt.mv.4,
+          plt.mv.5,
+          legend,
+          cols=3)
+dev.off()
+
+plot.df$c_stat <- round(plot.df$c_stat, 3)
+kable(plot.df[,c("biomarker", "c_stat", "lo", "hi", "subgroup", "events_per_df")],
+      row.names=FALSE)
+```
+
+It doesn't seem that a combination is better than GFAP alone.
+
+
+## Not adjusted
+
+```{r univar}
+## to store the results in
+result.uni <- expand.grid(biomarker=c(markers,"all"),
+                          c_stat=NA,
+                          lo=NA,
+                          hi=NA,
+                          outcome=c("CT+"),
+                          subgroup=c("Overall","Mild","GCS 15","ER","ICU", "Adm"),
+                          events_per_df=NA)
+
+
+
+
+for(i in 1:nrow(result.uni)){
+  if(result.uni$subgroup[i]=="Overall") subset <- rep(TRUE, nrow(df)) 
+  if(result.uni$subgroup[i]=="Mild")    subset <- df$GCSDer>12&!is.na(df$GCSDer)
+  if(result.uni$subgroup[i]=="GCS 15")  subset <- df$GCSDer==15&!is.na(df$GCSDer)
+  if(result.uni$subgroup[i]=="ER")      subset <- df$Stratum=="ER"
+  if(result.uni$subgroup[i]=="ICU")     subset <- df$Stratum=="ICU"
+  if(result.uni$subgroup[i]=="Adm")     subset <- df$Stratum=="Adm"
+  
+
+  ##fit the models
+  if(result.uni$biomarker[i]=="all"){
+    if(result.uni$outcome[i]=="CT+"){
+      if(result.uni$subgroup[i]%in%c("ER", "ICU", "Adm")){
+        #if the patient is in the ER/ICU/Adm stratum, don't adjust for stratum
+        fit <- fit.mult.impute(formula = as.formula("ctpos ~ rcs(UCHL1, 3) + rcs(NSE, 3)+ rcs(Tau, 3) + rcs(GFAP, 3) + rcs(S100B,3) + rcs(NFL, 3)"), 
+                             fitter = glm, xtrans = dfi, data = df, family = "binomial",
+                             subset=subset, pr = FALSE)
+      }else{
+        fit <- fit.mult.impute(formula = as.formula("ctpos ~ rcs(UCHL1, 3) + rcs(NSE, 3)+ rcs(Tau, 3) + rcs(GFAP, 3) + rcs(S100B,3) + rcs(NFL, 3)"), 
+                             fitter = glm, xtrans = dfi, data = df, family = "binomial",
+                             subset=subset, pr = FALSE)
+      }
+    }else{
+      if(result.mult$subgroup[i]%in%c("ER", "ICU", "Adm")){
+        #if patient is in the ER/Adm/ICU stratum, don't adjust for stratum
+          fit <- fit.mult.impute(formula = as.formula("ctnegmrpos ~ rcs(UCHL1, 3) + rcs(NSE, 3) + rcs(Tau, 3) + rcs(GFAP,3) + rcs(S100B, 3) + rcs(NFL, 3) "), 
+                               fitter = lrm, xtrans = dfi, data = df, subset = subset, 
+                               pr = FALSE)
+      }else{
+        fit <- fit.mult.impute(formula = as.formula("ctnegmrpos~ rcs(UCHL1, 3) + rcs(NSE, 3) + rcs(Tau, 3) + rcs(GFAP,3) + rcs(S100B, 3) + rcs(NFL, 3) "), 
+                               fitter = lrm, xtrans = dfi, data = df, subset = subset, 
+                               pr = FALSE)
+      }
+       
+    }
+  }else{
+      if(result.uni$outcome[i]=="CT+"){
+        if(result.uni$subgroup[i]%in%c("ER", "ICU", "Adm")){
+          #if patient is in the er/icu/adm stratum, don't correct for stratum
+          fit <- fit.mult.impute(formula = as.formula(paste("ctpos ~ rcs(",
+                                                          result.uni$biomarker[i],
+                                                          ",3)")), 
+                               fitter = glm, xtrans = dfi, data = df, family = "binomial",
+                               subset=subset, pr=FALSE)
+        }else{
+          fit <- fit.mult.impute(formula = as.formula(paste("ctpos ~ rcs(",
+                                                          result.uni$biomarker[i],
+                                                          ",3)")), 
+                               fitter = glm, xtrans = dfi, data = df, family = "binomial",
+                               subset=subset, pr = FALSE)
+        }
+         
+      }else{
+        if(result.uni$subgroup[i]%in%c("ER", "ICU", "Adm")){
+          #if patient is in the ER/ICU/Adm stratum, don't adjust for stratum
+            fit <- fit.mult.impute(formula = as.formula(paste("ctnegmrpos~ rcs(",
+                                                            result.uni$biomarker[i],
+                                                      ",3)")), 
+                                 fitter = lrm, xtrans = dfi, data = df, subset = subset, 
+                                 pr = FALSE)
+          
+        }else{
+          fit <- fit.mult.impute(formula = as.formula(paste("ctnegmrpos ~ rcs(",
+                                                            result.uni$biomarker[i],
+                                                      ",3)")), 
+                                 fitter = lrm, xtrans = dfi, data = df, subset = subset,
+                                pr = FALSE)
+        }
+      }
+    }
+    
+  
+  
+  
+  
+  cstat <- roc((df$CT.=="present")[subset], 
+                 predict(fit, type="response"))
+  c_res <- cstat$auc
+  
+  ci <- c(ci.auc(c_res, boot.n=200, method="bootstrap", progress="none"))
+  result.uni$c_stat[i] <- as.numeric(ci[2])
+  result.uni$lo[i] <- as.numeric(ci[1])
+  result.uni$hi[i] <- as.numeric(ci[3])
+  
+  
+  if(result.uni$outcome[i]=="CT+"){
+    events <- min(table(df$CT.[subset]))
+  }else{
+    events <- min(table(df$ctnegmrpos[subset]))
+  }
+  deg.f <- length(coef(fit)-1)
+  result.uni$events_per_df[i] <- events/deg.f
+}
+write.csv(result.uni, file="output_main/ctats_univariably.csv")
+```
+
+
+
+```{r}
+result.uni <- read.csv("output_main/ctats_univariably.csv")
+plot.df <- result.uni
+
+plot.df$lo[plot.df$lo<0.5] <- 0.5
+
+plot.df$biomarker <- factor(plot.df$biomarker,levels=c("none",
+                                                       markers,
+                                                       "all"))
+plot.df$subgroup <- factor(plot.df$subgroup, levels=c("Overall",
+                                                      "Mild",
+                                                      "GCS 15",
+                                                      "ER",
+                                                      "Adm",
+                                                      "ICU"))
+
+
+plt.mv.1 <- ggplot(plot.df[plot.df$biomarker!="none"&
+                             plot.df$subgroup=="Overall",],
+       aes(x=subgroup,y=c_stat, ymin=lo, ymax=hi,col=biomarker))+
+  geom_point(position=position_dodge(width = 0.5), cex=3)+
+  geom_linerange(position=position_dodge(width = 0.5), cex=2)+
+  theme_bw()+
+  xlab("")+
+  ylab("")+
+  scale_y_continuous("C-statistic", limits=c(0.5,1))+
+  theme(text=element_text(size=16),
+        legend.position = "none")+
+  scale_color_manual(values=2:8)+
+  geom_hline(yintercept = result.mult[result.mult$biomarker=="none"&
+                             result.mult$subgroup=="Overall","c_stat"],
+             lty=2)
+plt.mv.2 <- ggplot(plot.df[plot.df$biomarker!="none"&
+                             plot.df$subgroup=="Mild",],
+       aes(x=subgroup,y=c_stat, ymin=lo, ymax=hi,col=biomarker))+
+  geom_point(position=position_dodge(width = 0.5), cex=3)+
+  geom_linerange(position=position_dodge(width = 0.5), cex=2)+
+  theme_bw()+
+  xlab("")+
+  ylab("")+
+  scale_y_continuous("C-statistic", limits=c(0.5,1))+
+  theme(text=element_text(size=16),
+        legend.position = "none")+
+  scale_color_manual(values=2:8)+
+  geom_hline(yintercept = result.mult[result.mult$biomarker=="none"&
+                             result.mult$subgroup=="Mild","c_stat"],
+             lty=2)
+plt.mv.3 <- ggplot(plot.df[plot.df$biomarker!="none"&
+                             plot.df$subgroup=="ER",],
+       aes(x=subgroup,y=c_stat, ymin=lo, ymax=hi,col=biomarker))+
+  geom_point(position=position_dodge(width = 0.5), cex=3)+
+  geom_linerange(position=position_dodge(width = 0.5), cex=2)+
+  theme_bw()+
+  xlab("")+
+  ylab("")+
+  scale_y_continuous("C-statistic", limits=c(0.5,1))+
+  theme(text=element_text(size=16),
+        legend.position = "none")+
+  scale_color_manual(values=2:8)+
+  geom_hline(yintercept = result.mult[result.mult$biomarker=="none"&
+                             result.mult$subgroup=="ER","c_stat"],
+             lty=2)
+plt.mv.4 <- ggplot(plot.df[plot.df$biomarker!="none"&
+                             plot.df$subgroup=="Adm",],
+       aes(x=subgroup,y=c_stat, ymin=lo, ymax=hi,col=biomarker))+
+  geom_point(position=position_dodge(width = 0.5), cex=3)+
+  geom_linerange(position=position_dodge(width = 0.5), cex=2)+
+  theme_bw()+
+  xlab("")+
+  ylab("")+
+  scale_y_continuous("C-statistic", limits=c(0.5,1))+
+  theme(text=element_text(size=16),
+        legend.position = "none")+
+  scale_color_manual(values=2:8)+
+  geom_hline(yintercept = result.mult[result.mult$biomarker=="none"&
+                             result.mult$subgroup=="Adm","c_stat"],
+             lty=2)
+plt.mv.5 <- ggplot(plot.df[plot.df$biomarker!="none"&
+                             plot.df$subgroup=="ICU",],
+       aes(x=subgroup,y=c_stat, ymin=lo, ymax=hi,col=biomarker))+
+  geom_point(position=position_dodge(width = 0.5), cex=3)+
+  geom_linerange(position=position_dodge(width = 0.5), cex=2)+
+  theme_bw()+
+  xlab("")+
+  ylab("")+
+  scale_y_continuous("C-statistic", limits=c(0.5,1))+
+  theme(text=element_text(size=16),
+        legend.position = "none")+
+  scale_color_manual(values=2:8)+
+  geom_hline(yintercept = result.mult[result.mult$biomarker=="none"&
+                             result.mult$subgroup=="ICU","c_stat"],
+             lty=2)
+
+legend <- get_legend(plt.mv.5+theme(legend.position="left"))
+legend <- as_ggplot(legend)
+
+plt.mv.6 <- ggplot(plot.df[plot.df$biomarker!="none"&
+                             plot.df$subgroup=="GCS 15",],
+       aes(x=subgroup,y=c_stat, ymin=lo, ymax=hi,col=biomarker))+
+  geom_point(position=position_dodge(width = 0.5), cex=3)+
+  geom_linerange(position=position_dodge(width = 0.5), cex=2)+
+  theme_bw()+
+  xlab("")+
+  ylab("")+
+  scale_y_continuous("C-statistic", limits=c(0.5,1))+
+  theme(text=element_text(size=16),
+        legend.position = "none")+
+  scale_color_manual(values=2:8)+
+  geom_hline(yintercept = result.mult[result.mult$biomarker=="none"&
+                             result.mult$subgroup=="GCS 15","c_stat"],
+             lty=2)
+
+multiplot(plt.mv.1,
+          plt.mv.2,
+          plt.mv.6,
+          plt.mv.3,
+          plt.mv.4,
+          plt.mv.5,
+          legend,
+          cols=3)
+
+pdf("output_main/result_ct_unadj.pdf")
+multiplot(plt.mv.1,
+          plt.mv.2,
+          plt.mv.6,
+          plt.mv.3,
+          plt.mv.4,
+          plt.mv.5,
+          legend,
+          cols=3)
+dev.off()
+
+plot.df$c_stat <- round(plot.df$c_stat, 3)
+kable(plot.df[,c("biomarker", "c_stat", "lo", "hi", "subgroup", "events_per_df")],
+      row.names=FALSE)
+```
+
+
+Unadjusted, the most promising biomarker is again GFAP. In particular, in the Adm stratum it performs better than the clinical decision rule variables (the dotted line). 
+
+### Combination
+Similar to the adjusted analysis, we wanted to show the diagnostic effect of a combination of markers:
+
+```{r, fig.width=10, fig.height=13}
+result.comb <- read.csv("output_main/ctats_combination.csv")
+plot.df <- result.comb[result.comb$adjust=="No",]
+
+plt.mv.1 <- ggplot(plot.df[plot.df$biomarker!="none"&
+                             plot.df$subgroup=="Overall",],
+       aes(x=subgroup,y=c_stat, ymin=lo, ymax=hi,col=biomarker))+
+  geom_point(position=position_dodge(width = 0.5), cex=3)+
+  geom_linerange(position=position_dodge(width = 0.5), cex=2)+
+  theme_bw()+
+  xlab("")+
+  ylab("")+
+  scale_y_continuous("C-statistic", limits=c(0.5,1))+
+  theme(text=element_text(size=16),
+        legend.position = "none")+
+  scale_color_manual(values=2:8)+
+  geom_hline(yintercept = result.mult[result.mult$biomarker=="none"&
+                             result.mult$subgroup=="Overall","c_stat"],
+             lty=2)
+
+plt.mv.2 <- ggplot(plot.df[plot.df$biomarker!="none"&
+                             plot.df$subgroup=="Mild",],
+       aes(x=subgroup,y=c_stat, ymin=lo, ymax=hi,col=biomarker))+
+  geom_point(position=position_dodge(width = 0.5), cex=3)+
+  geom_linerange(position=position_dodge(width = 0.5), cex=2)+
+  theme_bw()+
+  xlab("")+
+  ylab("")+
+  scale_y_continuous("C-statistic", limits=c(0.5,1))+
+  theme(text=element_text(size=16),
+        legend.position = "none")+
+  scale_color_manual(values=2:8)+
+  geom_hline(yintercept = result.mult[result.mult$biomarker=="none"&
+                             result.mult$subgroup=="Mild","c_stat"],
+             lty=2)
+plt.mv.3 <- ggplot(plot.df[plot.df$biomarker!="none"&
+                             plot.df$subgroup=="ER",],
+       aes(x=subgroup,y=c_stat, ymin=lo, ymax=hi,col=biomarker))+
+  geom_point(position=position_dodge(width = 0.5), cex=3)+
+  geom_linerange(position=position_dodge(width = 0.5), cex=2)+
+  theme_bw()+
+  xlab("")+
+  ylab("")+
+  scale_y_continuous("C-statistic", limits=c(0.5,1))+
+  theme(text=element_text(size=16),
+        legend.position = "none")+
+  scale_color_manual(values=2:8)+
+  geom_hline(yintercept = result.mult[result.mult$biomarker=="none"&
+                             result.mult$subgroup=="ER","c_stat"],
+             lty=2)
+plt.mv.4 <- ggplot(plot.df[plot.df$biomarker!="none"&
+                             plot.df$subgroup=="Adm",],
+       aes(x=subgroup,y=c_stat, ymin=lo, ymax=hi,col=biomarker))+
+  geom_point(position=position_dodge(width = 0.5), cex=3)+
+  geom_linerange(position=position_dodge(width = 0.5), cex=2)+
+  theme_bw()+
+  xlab("")+
+  ylab("")+
+  scale_y_continuous("C-statistic", limits=c(0.5,1))+
+  theme(text=element_text(size=16),
+        legend.position = "none")+
+  scale_color_manual(values=2:8)+
+  geom_hline(yintercept = result.mult[result.mult$biomarker=="none"&
+                             result.mult$subgroup=="Adm","c_stat"],
+             lty=2)
+plt.mv.5 <- ggplot(plot.df[plot.df$biomarker!="none"&
+                             plot.df$subgroup=="ICU",],
+       aes(x=subgroup,y=c_stat, ymin=lo, ymax=hi,col=biomarker))+
+  geom_point(position=position_dodge(width = 0.5), cex=3)+
+  geom_linerange(position=position_dodge(width = 0.5), cex=2)+
+  theme_bw()+
+  xlab("")+
+  ylab("")+
+  scale_y_continuous("C-statistic", limits=c(0.5,1))+
+  theme(text=element_text(size=16),
+        legend.position = "none")+
+  scale_color_manual(values=2:8)+
+  geom_hline(yintercept = result.mult[result.mult$biomarker=="none"&
+                             result.mult$subgroup=="ICU","c_stat"],
+             lty=2)
+
+legend <- get_legend(plt.mv.5+theme(legend.position="left"))
+legend <- as_ggplot(legend)
+
+plt.mv.6 <- ggplot(plot.df[plot.df$biomarker!="none"&
+                             plot.df$subgroup=="GCS 15",],
+       aes(x=subgroup,y=c_stat, ymin=lo, ymax=hi,col=biomarker))+
+  geom_point(position=position_dodge(width = 0.5), cex=3)+
+  geom_linerange(position=position_dodge(width = 0.5), cex=2)+
+  theme_bw()+
+  xlab("")+
+  ylab("")+
+  scale_y_continuous("C-statistic", limits=c(0.5,1))+
+  theme(text=element_text(size=16),
+        legend.position = "none")+
+  scale_color_manual(values=2:8)+
+  geom_hline(yintercept = result.mult[result.mult$biomarker=="none"&
+                             result.mult$subgroup=="GCS 15","c_stat"],
+             lty=2)
+
+multiplot(plt.mv.1,
+          plt.mv.2,
+          plt.mv.6,
+          plt.mv.3,
+          plt.mv.4,
+          plt.mv.5,
+          legend,
+          cols=3)
+
+pdf("output_main/result_ct_unadj_combs.pdf", width=10, heigh=13)
+multiplot(plt.mv.1,
+          plt.mv.2,
+          plt.mv.6,
+          plt.mv.3,
+          plt.mv.4,
+          plt.mv.5,
+          legend,
+          cols=3)
+dev.off()
+
+plot.df$c_stat <- round(plot.df$c_stat, 3)
+kable(plot.df[,c("biomarker", "c_stat", "lo", "hi", "subgroup", "events_per_df")],
+      row.names=FALSE)
+```
+
+Again, the combinations of biomarkers do not seem to outperform GFAP when we do not adjust for clinical decision rule variables. 
+
+## % better than CDR
+An interesting metric would be to calculate the proportion of times GFAP is better than clinical decision rules only in specific subgroups. This can be calculated using a bootstrap procedure. 
+```{r}
+set.seed(123)
+fit.gfap <- glm(formula = ctpos ~ rcs(GFAP,3),data = df, family = "binomial")
+fit.nse <- update(fit.gfap,formula=ctpos~rcs(NSE,3))
+fit.s100b <- update(fit.gfap,formula=ctpos~rcs(S100B,3))
+fit.nfl <- update(fit.gfap,formula=ctpos~rcs(NFL,3))
+fit.tau <- update(fit.gfap,formula=ctpos~rcs(Tau,3))
+fit.uchl1 <- update(fit.gfap,formula=ctpos~rcs(UCHL1,3))
+fit.cdr  <- update(fit.gfap, formula= as.formula(paste("ctpos ~ rcs(t_sample,3)+",paste(cor.ct.var, collapse="+"))))
+
+n.iter <- 100  ## number of iterations PER imputed dataset
+
+boot_gfap_better <- function(data,indices, subgroup, biomarker){
+  d <- data[indices,]
+  
+  if(biomarker=="GFAP")  fit <- fit.gfap
+  if(biomarker=="UCHL1") fit <- fit.uchl1
+  if(biomarker=="NFL")   fit <- fit.nfl
+  if(biomarker=="S100B") fit <- fit.s100b
+  if(biomarker=="Tau")   fit <- fit.tau
+  if(biomarker=="NSE")   fit <- fit.nse
+  
+  if(subgroup=="Overall"){
+    subset.df <- rep(TRUE, nrow(df)) 
+    subset.d <- rep(TRUE, nrow(d)) 
+  } 
+  if(subgroup=="Mild"){
+    subset.df <- df$GCSDer>12&!is.na(df$GCSDer)
+    subset.d <- d$GCSDer>12&!is.na(d$GCSDer)
+  }    
+  if(subgroup=="GCS 15"){
+    subset.df <- df$GCSDer==15&!is.na(df$GCSDer)
+    subset.d <- d$GCSDer==15&!is.na(d$GCSDer)
+  } 
+  if(subgroup=="ER"){
+    subset.df <- df$Stratum=="ER"
+    subset.d <- d$Stratum=="ER"
+  }     
+  if(subgroup=="ICU"){
+    subset.df <- df$Stratum=="ICU"
+    subset.d <- d$Stratum=="ICU"
+  }     
+  if(subgroup=="Adm"){
+    subset.df <- df$Stratum=="Adm"
+    subset.d <- d$Stratum=="Adm"
+  }     
+  
+  fit      <- update(fit,     data=d, subset=subset.d)
+  fit.cdr  <- update(fit.cdr, data=d, subset=subset.d)
+  
+  pred     <- predict(fit,     newdata=df[subset.df,])
+  pred_cdr <- predict(fit.cdr, newdata=df[subset.df,])
+  
+  #calculate cstats
+  c_bm <- roc((df$CT.=="present")[subset.df]~pred)
+  c_cdr <- roc((df$CT.=="present")[subset.df]~pred_cdr)
+  
+  #which is better?
+  if(c_bm$auc>c_cdr$auc){
+    x <- "Marker"
+  }else{
+   if(c_bm$auc<c_cdr$auc){
+    x <- "CDR"
+   }else{
+     x <- "equal"
+   }
+  }
+  return(x)
+}
+
+bootstrap_res <- expand.grid(biomarker=markers,
+                                  subgroup=c("Overall",
+                                             "Mild",
+                                             "GCS 15",
+                                             "ER",
+                                             "Adm",
+                                             "ICU"),
+                                  perc_better=NA)
+for(j in 1:nrow(bootstrap_res)){
+  bootstrap_res_t <- rep(NA, dfi$m*n.iter)
+  for (i in 1:dfi$m){
+  bootstrap <- boot::boot(data = complete(dfi,i),
+                             R = n.iter, 
+                             statistic = boot_gfap_better,
+                             subgroup=bootstrap_res$subgroup[j],
+                             biomarker=bootstrap_res$biomarker[j])
+  bootstrap_res_t[(1+(i*n.iter-n.iter)):(n.iter+(i*n.iter-n.iter))] <- c(bootstrap$t)
+  }
+  bootstrap_res$perc_better[j] <- sum(bootstrap_res_t=="Marker")/(n.iter*dfi$m)
+}
+
+
+save(bootstrap_res, file="data/gfap_bootstrap.RData")
+```
+
+```{r}
+load("data/gfap_bootstrap.RData")
+bootstrap_res$perc_better <- round(bootstrap_res$perc_better,2)
+
+plot.better <- ggplot(data = bootstrap_res, 
+       aes(x=biomarker, y=subgroup, fill=perc_better, label=perc_better)) + 
+  geom_tile()+
+  geom_text(color = "black", size = 4)+
+  xlab("Biomarker")+ylab("Subgroup")+
+ scale_fill_gradient2(low = "red", high = "blue", mid = "white", 
+   midpoint = 0.5, limit = c(0,1), space = "Lab", 
+   name="Percentage better\nthan CDR variables")+
+  theme_bw()+theme(text = element_text(size=16))
+plot.better
+
+pdf("output_main/perc_better_unadjusted.pdf")
+plot.better
+dev.off()
+
+```
+
+By using a bootstrap method (applying the univariable biomarker, and multivariable CDR variables model to a  bootstrap sample of the original data 1000 times), we assessed that the percentages of times that the biomarker outperforms the CDR variables is highly dependent on what subgroup and what biomarker is used.
+
+## Reclassification GFAP for diagnosis
+
+A question of interest is whether adding GFAP to the clinical decision rules identifies new patients for CT+, this is called reclassification. We can visually assess this, with reclassification plots:
+
+```{r, fig.width=13, fig.height=9}
+
+fit.ct.mv.GFAP <- fit.mult.impute(as.formula(paste("ctpos ~ rcs(t_sample,3)+rcs(GFAP,3)+",
+                                                    paste(cor.ct.var, collapse="+"))),
+                                   fitter=lrm, data=df, xtrans=dfi, pr=FALSE)
+fit.ct.mv.CDR <- update(fit.ct.mv.GFAP, formula=as.formula(paste("ctpos ~ rcs(t_sample,3)+",
+                                                    paste(cor.ct.var, collapse="+"))))
+
+subgroups <- c("Overall","Mild","ER", "Adm","ICU","GCS 15")
+
+plot.recls <- data.frame(pred_cdr     = predict(fit.ct.mv.CDR, type = "fitted"),
+                         pred_gfap_cdr = predict(fit.ct.mv.GFAP, type="fitted"),
+                         ct            = df$CT.)
+
+data_rcl <- list(plot.recls)
+for (i in 2:length(subgroups)){
+  if(subgroups[i]=="Overall") subsetrcls <- rep(TRUE, nrow(df))
+  if(subgroups[i]=="Mild") subsetrcls <- df$GCSDer>12&!is.na(df$GCSDer)
+  if(subgroups[i]=="GCS 15") subsetrcls <- df$GCSDer==15&!is.na(df$GCSDer)
+  if(subgroups[i]=="ER")   subsetrcls <- df$Stratum=="ER"
+  if(subgroups[i]=="ICU")  subsetrcls <- df$Stratum=="ICU"
+  if(subgroups[i]=="Adm")  subsetrcls <- df$Stratum=="Adm"
+  
+  if(subgroups[i]=="GCS 15"){
+    fit.ct.mv.GFAP <- update(fit.ct.mv.GFAP,
+                             formula=as.formula(paste("ctpos ~ rcs(t_sample,3)+rcs(GFAP,3)+",
+     paste(cor.ct.var[-11], collapse = "+"))), subset=subsetrcls)
+    fit.ct.mv.CDR <- update(fit.ct.mv.CDR, 
+                            formula=as.formula(paste("ctpos ~ rcs(t_sample,3)+", paste(cor.ct.var[-11], collapse = "+"))),
+                            subset=subsetrcls)
+  }else{
+    fit.ct.mv.GFAP <- update(fit.ct.mv.GFAP, subset=subsetrcls)
+    fit.ct.mv.CDR <- update(fit.ct.mv.CDR, subset=subsetrcls)
+  }
+  
+  data_rcl[[i]] <- data.frame(pred_cdr     = predict(fit.ct.mv.CDR, type = "fitted"),
+                         pred_gfap_cdr = predict(fit.ct.mv.GFAP, type="fitted"),
+                         ct            = df$CT.[subsetrcls])
+}
+
+recls_overall <- ggplot(data_rcl[[1]], aes(x=pred_cdr, y=pred_gfap_cdr, col=ct, shape=ct))+
+  geom_point()+theme_bw()+
+  scale_shape_manual("CT abnormality",values=c(1,4))+
+  scale_color_manual("CT abnormality", values=c("black", "red"))+
+  theme(text = element_text(size=16),
+        legend.position = "none")+
+  xlab("Probability of CT+ by CDR")+
+  ylab("Probability of CT+ by CDR+GFAP")+
+  ggtitle(subgroups[1])
+
+recls_mild <- ggplot(data_rcl[[2]], aes(x=pred_cdr, y=pred_gfap_cdr, col=ct, shape=ct))+
+  geom_point()+theme_bw()+
+  scale_shape_manual("CT abnormality",values=c(1,4))+
+  scale_color_manual("CT abnormality", values=c("black", "red"))+
+  theme(text = element_text(size=16),
+        legend.position = "none")+
+  xlab("Probability of CT+ by CDR")+
+  ylab("Probability of CT+ by CDR+GFAP")+
+  ggtitle(subgroups[2])
+
+recls_er <- ggplot(data_rcl[[3]], aes(x=pred_cdr, y=pred_gfap_cdr, col=ct, shape=ct))+
+  geom_point()+theme_bw()+
+  scale_shape_manual("CT abnormality",values=c(1,4))+
+  scale_color_manual("CT abnormality", values=c("black", "red"))+
+  theme(text = element_text(size=16),
+        legend.position = "none")+
+  xlab("Probability of CT+ by CDR")+
+  ylab("Probability of CT+ by CDR+GFAP")+
+  ggtitle(subgroups[3])
+
+recls_icu <- ggplot(data_rcl[[4]], aes(x=pred_cdr, y=pred_gfap_cdr, col=ct, shape=ct))+
+  geom_point()+theme_bw()+
+  scale_shape_manual("CT abnormality",values=c(1,4))+
+  scale_color_manual("CT abnormality", values=c("black", "red"))+
+  theme(text = element_text(size=16),
+        legend.position = "none")+
+  xlab("Probability of CT+ by CDR")+
+  ylab("Probability of CT+ by CDR+GFAP")+
+  ggtitle(subgroups[4])
+
+recls_adm <- ggplot(data_rcl[[5]], aes(x=pred_cdr, y=pred_gfap_cdr, col=ct, shape=ct))+
+  geom_point()+theme_bw()+
+  scale_shape_manual("CT abnormality",values=c(1,4))+
+  scale_color_manual("CT abnormality", values=c("black", "red"))+
+  theme(text = element_text(size=16),
+        legend.position = "none")+
+  xlab("Probability of CT+ by CDR")+
+  ylab("Probability of CT+ by CDR+GFAP")+
+  ggtitle(subgroups[5])
+
+recls_gcs15 <- ggplot(data_rcl[[6]], aes(x=pred_cdr, y=pred_gfap_cdr, col=ct, shape=ct))+
+  geom_point()+theme_bw()+
+  scale_shape_manual("CT abnormality",values=c(1,4))+
+  scale_color_manual("CT abnormality", values=c("black", "red"))+
+  theme(text = element_text(size=16),
+        legend.position = "none")+
+  xlab("Probability of CT+ by CDR")+
+  ylab("Probability of CT+ by CDR+GFAP")+
+  ggtitle(subgroups[6])
+
+legend <- get_legend(recls_adm+theme(legend.position="left"))
+legend <- as_ggplot(legend)
+
+multiplot(recls_overall,
+          recls_mild,
+          recls_gcs15,
+          recls_er,
+          recls_adm,
+          recls_icu,
+          legend,
+          cols=3)
+
+pdf("output_main/reclassification_gfap.pdf", height=10, width=13)
+multiplot(recls_overall,
+          recls_mild,
+          recls_gcs15,
+          recls_er,
+          recls_adm,
+          recls_icu,
+          legend,
+          cols=3)
+dev.off()
+
+```
+
+The figure above shows that there are new patients identified by adding GFAP to the model. Taking GFAP into account particularly increases the probability of CT abnormality in patients who have a CT abnormality: there are more red crosses in the upper left corner. There are no black bubbles in the bottom right corner: GFAP does not lower the probability of CT+ in patients who have no CT abnormality. Or to put it differently, on top of the decision rule, GFAP is able to rule in patients of CT+, but is not able to rule out patients of CT+.
+
+The shift appears to be quite consistent in the 5 subgroups. Mainly the number of patients with a positive or negative CT scan differs, of course. 
+
+#Predict MR+ in CT-
+
+```{r}
+## to store the results in
+result.uni <- expand.grid(biomarker=c(markers),
+                          c_stat=NA,
+                          lo=NA,
+                          hi=NA,
+                          outcome=c("MR+"),
+                          events_per_df=NA)
+
+
+
+
+for(i in 1:nrow(result.uni)){
+  if(result.uni$outcome[i]=="MR+") subset <- subset & (df$CT.=="absent")
+  
+  ##fit the models
+  if(result.uni$biomarker[i]=="all"){
+      fit <- fit.mult.impute(formula = as.formula("ctnegmrpos~ rcs(UCHL1, 3) + rcs(NSE, 3) + rcs(Tau, 3) + rcs(GFAP,3) + rcs(S100B, 3) + rcs(NFL, 3) "), 
+                               fitter = glm, xtrans = dfi, data = df, subset = subset, 
+                               pr = FALSE, family="binomial")
+      
+  }else{
+    fit <- fit.mult.impute(formula = as.formula(paste("ctnegmrpos ~ ",
+                                                            result.uni$biomarker[i])), 
+                                 fitter = glm, xtrans = dfi, data = df, subset = subset,
+                                pr = FALSE, family="binomial")
+        
+      }
+    
+  
+    
+  
+  
+  
+  
+  cstat <- roc(df$ctnegmrpos[subset], 
+                 predict(fit, type="response"))
+  c_res <- cstat$auc
+  
+  ci <- c(ci.auc(c_res, boot.n=200, method="bootstrap", progress="none"))  
+  result.uni$lo[i] <- as.numeric(ci[1])
+  result.uni$hi[i] <- as.numeric(ci[3])
+  result.uni$c_stat[i] <- as.numeric(ci[2])
+  
+  
+  
+  events <- min(table(df$ctnegmrpos[subset]))
+  
+  
+  deg.f <- length(coef(fit)-1)
+  result.uni$events_per_df[i] <- events/deg.f
+}
+write.csv(result.uni, file="output_main/ctats_mr.csv")
+```
+
+```{r}
+plot.df <- read.csv("output_main/ctats_mr.csv")
+
+plot.df$biomarker <- factor(plot.df$biomarker, levels = markers)
+plot.df$lo[plot.df$lo<0.5] <-0.5 
+mrplot <- ggplot(plot.df,
+       aes(x=biomarker,y=c_stat, ymin=lo, ymax=hi, col=biomarker))+
+  geom_point(position=position_dodge(width = 0.5), cex=3)+
+  geom_linerange(position=position_dodge(width = 0.5), cex=2)+
+  theme_bw()+
+  xlab("")+
+  ylab("")+
+  scale_y_continuous("C-statistic", limits=c(0.5,1))+
+  theme(text=element_text(size=16),
+        legend.position = "none")+
+  scale_color_manual(values=2:8)
+
+mrplot
+
+pdf("output_main/mrpos.pdf")
+mrplot
+dev.off()
+```
+
+Again, we see that GFAP shows the most interesting signal. However, be aware that this is not adjusted for clinical decision rule variables (since there were only `r table(df$ctnegmrpos)[2]` patients with a positive MRI scan in `r table(df$ctpos)[1]` patients with negative CT scans). This means that we can mostly compare the results between biomarkers, but not trust the actual estimates. 
+
+### 6 hourly performance
+To assess the difference in performance over time, we will do stratified analyses in every 6 hour group. The performance will be calculated as the difference with the CDR variables. Since every stratified analysis is comprised of different patients, you cannot directly compare the performance in each group with eachother. Instead, if you take the performance relative to the CDR variable model, you are able to better compare the performance. Needless to say, we can only do this for the adjusted analysis.
+
+Additionally, since there are only `r table(cut(df$t_sample[df$Stratum=="ER"], breaks = c(0,6,12,18,24)))[3]` patients in the ER stratum with sample times between 12 and 18 hours, and `r table(cut(df$t_sample[df$Stratum=="ER"], breaks = c(0,6,12,18,24)))[4]` patients in the ER stratum with sample times between 12 and 24 hours, the numbers are too small to perform this analysis for the ER stratum. However, since this is the stratum of interest, I did not perform a the stratum-stratified analysis.
+
+```{r}
+## to store the results in
+result.time <- expand.grid(timepoint=1:4,
+                          biomarker=c("none",markers),
+                          c_stat=NA,
+                          lo=NA,
+                          hi=NA,
+                          outcome=c("CT+"),
+                          subgroup=c("Overall","Mild","GCS 15"),
+                          events_per_df=NA)
+
+
+for(i in 1:nrow(result.time)){
+  if(result.time$subgroup[i]=="Overall")  subset <- rep(TRUE, nrow(df)) 
+  if(result.time$subgroup[i]=="Mild")     subset <- df$GCSDer>12&!is.na(df$GCSDer)
+  if(result.time$subgroup[i]=="GCS 15")   subset <- df$GCSDer==15&!is.na(df$GCSDer)
+  
+  ##time subsets
+  if(result.time$timepoint[i]==1) subset <- subset&(df$t_sample<6)
+  if(result.time$timepoint[i]==2) subset <- subset&(df$t_sample>=6&df$t_sample<12)
+  if(result.time$timepoint[i]==3) subset <- subset&(df$t_sample>=12&df$t_sample<18)
+  if(result.time$timepoint[i]==4) subset <- subset&(df$t_sample>=18)
+  
+  ##the formulas for the models
+  if(result.time$biomarker[i]!="none"){
+    fml <- paste("ctpos ~ rcs(",result.time$biomarker[i],",3)+",
+                 paste(cor.ct.var, collapse="+"))
+  }else{
+    fml <- paste("ctpos ~ ",paste(cor.ct.var, collapse="+"),collapse="+")
+  }
+  
+  ##fit the model
+  fit <- fit.mult.impute(formula = as.formula(fml),
+                             fitter = glm, 
+                         xtrans = dfi, data = df, family = "binomial",
+                             subset=subset, pr = FALSE)
+  
+  
+  cstat <- roc((df$CT.=="present")[subset], 
+                 predict(fit, type="response"))
+  c_res <- cstat$auc
+  
+  ci <- c(ci.auc(c_res, boot.n=200, method="bootstrap", progress="none"))
+  
+  result.time$c_stat[i] <- as.numeric(ci[2])
+  result.time$lo[i] <- as.numeric(ci[1])
+  result.time$hi[i] <- as.numeric(ci[3])
+  
+  
+  if(result.time$outcome[i]=="CT+"){
+    events <- min(table(df$CT.[subset]))
+  }else{
+    events <- min(table(df$ctnegmrpos[subset]))
+  }
+  deg.f <- length(coef(fit)-1)
+  result.time$events_per_df[i] <- events/deg.f
+}
+write.csv(result.time, file="output_main/ctats_time.csv", row.names = FALSE)
+```
+
+
+
+```{r}
+result.time <- read.csv("output_main/ctats_time.csv")
+
+none    <- result.time[result.time$biomarker=="none",]
+plot.df <- result.time[result.time$biomarker!="none",]
+
+plot.df[,c("c_stat", "lo", "hi")] <- apply(plot.df[,c("c_stat", "lo", "hi")],
+                                           2,
+                                           function(x){x-none$c_stat})
+
+plot.df$timepoint <- factor(plot.df$timepoint)
+levels(plot.df$timepoint) <- c("< 6 h", "6-12 h", "12-18 h", ">18 h")
+plot.df$biomarker <- factor(plot.df$biomarker, levels=markers)
+
+plt.time.2 <- ggplot(plot.df[plot.df$subgroup=="Mild",],
+       aes(x=timepoint,y=c_stat, ymin=lo, ymax=hi,col=biomarker))+
+  geom_point(position=position_dodge(width = 0.5), cex=3)+
+  geom_linerange(position=position_dodge(width = 0.5), cex=2)+
+  theme_bw()+
+  xlab("Mild")+
+  ylab("")+
+  scale_y_continuous("Incremental C-statistic", limits=c(-0.3,0.3))+
+  theme(text=element_text(size=16),
+        legend.position = "none")+
+  scale_color_manual(values=2:8)+
+  geom_hline(yintercept = 0,
+             lty=2)
+
+plt.time.1 <- ggplot(plot.df[plot.df$subgroup=="Overall",],
+       aes(x=timepoint,y=c_stat, ymin=lo, ymax=hi,col=biomarker))+
+  geom_point(position=position_dodge(width = 0.5), cex=3)+
+  geom_linerange(position=position_dodge(width = 0.5), cex=2)+
+  theme_bw()+
+  xlab("Overall")+
+  ylab("")+
+  scale_y_continuous("Incremental C-statistic", limits=c(-0.3,0.3))+
+  theme(text=element_text(size=16),
+        legend.position = "none")+
+  scale_color_manual(values=2:8)+
+  geom_hline(yintercept = 0,
+             lty=2)
+
+plt.time.3 <- ggplot(plot.df[plot.df$subgroup=="GCS 15",],
+       aes(x=timepoint,y=c_stat, ymin=lo, ymax=hi,col=biomarker))+
+  geom_point(position=position_dodge(width = 0.5), cex=3)+
+  geom_linerange(position=position_dodge(width = 0.5), cex=2)+
+  theme_bw()+
+  xlab("GCS 15")+
+  ylab("")+
+  scale_y_continuous("Incremental C-statistic", limits=c(-0.3,0.3))+
+  theme(text=element_text(size=16),
+        legend.position = "none")+
+  scale_color_manual(values=2:8)+
+  geom_hline(yintercept = 0,
+             lty=2)
+
+legend <- get_legend(plt.time.1+theme(legend.position="left"))
+legend <- as_ggplot(legend)
+
+multiplot(plt.time.1,plt.time.2, plt.time.3, legend, cols=2)
+
+pdf("output_main/result_ct_adj_time.pdf")
+multiplot(plt.time.1,plt.time.2, plt.time.3, legend, cols=2)
+dev.off()
+
+kable(plot.df[,c("biomarker","timepoint", "c_stat", "lo", "hi", "subgroup", "events_per_df")],
+      row.names=FALSE)
+```
+
+The incremental diagnostic value is not very dependent on time. The previously found difference is probably due to difference in case-mix between multiple timepoints. 
